@@ -1,9 +1,10 @@
-use std::sync::{self, MutexGuard, TryLockError};
+use std::sync::{TryLockError};
+use shuttle::sync::{self, MutexGuard};
 
 /// Adapter for `std::Mutex` that removes the poisoning aspects
 // from its api
 #[derive(Debug)]
-pub(crate) struct Mutex<T: ?Sized>(sync::Mutex<T>);
+pub(crate) struct Mutex<T>(sync::Mutex<T>);
 
 #[allow(dead_code)]
 impl<T> Mutex<T> {

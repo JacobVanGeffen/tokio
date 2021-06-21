@@ -158,6 +158,31 @@ impl<T> JoinHandle<T> {
         }
     }
 
+    pub(crate) fn new_empty() -> JoinHandle<T> {
+        struct PendingFuture {}
+        impl Future for PendingFuture {
+            type Output = ();
+
+            fn poll(self: std::pin::Pin<&mut Self>, _cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+                std::task::Poll::Pending
+            }
+        }
+
+        struct NopSchedule {}
+        impl crate::runtime::task::Schedule for NopSchedule {
+            fn bind(task: crate::runtime::task::Task<Self>) -> Self {
+                NopSchedule {}
+            }
+
+            fn release(&self, task: &crate::runtime::task::Task<Self>) -> Option<crate::runtime::task::Task<Self>> {
+                None
+            }
+
+            fn schedule(&self, task: crate::runtime::task::Notified<Self>) {}
+        }
+        JoinHandle::new(RawTask::new::<PendingFuture, NopSchedule>(PendingFuture {}))
+    }
+
     /// Abort the task associated with the handle.
     ///
     /// Awaiting a cancelled task might complete as usual if the task was

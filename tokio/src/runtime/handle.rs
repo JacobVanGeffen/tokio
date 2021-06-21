@@ -138,15 +138,20 @@ impl Handle {
     /// });
     /// # }
     /// ```
+    // TODO do we want to hijack this as well?
     #[cfg_attr(tokio_track_caller, track_caller)]
     pub fn spawn<F>(&self, future: F) -> JoinHandle<F::Output>
     where
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
+
         #[cfg(all(tokio_unstable, feature = "tracing"))]
         let future = crate::util::trace::task(future, "task");
-        self.spawner.spawn(future)
+        // TODO pass this join handler into the "empty" join handler
+        shuttle::asynch::spawn(future);
+        JoinHandle::new_empty()
+        //self.spawner.spawn(future)
     }
 
     /// Run the provided function on an executor dedicated to blocking
@@ -174,7 +179,7 @@ impl Handle {
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        let fut = BlockingTask::new(func);
+        // let fut = BlockingTask::new(func);
 
         #[cfg(all(tokio_unstable, feature = "tracing"))]
         let fut = {
@@ -198,9 +203,12 @@ impl Handle {
             );
             fut.instrument(span)
         };
-        let (task, handle) = task::joinable(fut);
-        let _ = self.blocking_spawner.spawn(task, &self);
-        handle
+        // let (task, handle) = task::joinable(fut);
+        // let _ = self.blocking_spawner.spawn(task, &self);
+        // handle
+        // TODO pass this join handle into the "empty" join handle
+        shuttle::thread::spawn(func);
+        JoinHandle::new_empty()
     }
 
     /// Run a future to completion on this `Handle`'s associated `Runtime`.
