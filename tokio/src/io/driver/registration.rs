@@ -73,7 +73,7 @@ impl Registration {
         handle: Handle,
     ) -> io::Result<Registration> {
         let shared = if let Some(inner) = handle.inner() {
-            inner.add_source(io, interest)?
+            inner.lock().add_source(io, interest)?
         } else {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
@@ -105,6 +105,7 @@ impl Registration {
             Some(inner) => inner,
             None => return Err(io::Error::new(io::ErrorKind::Other, "reactor gone")),
         };
+        let inner = inner.lock();
         inner.deregister_source(io)
     }
 
@@ -155,7 +156,9 @@ impl Registration {
     ) -> Poll<io::Result<ReadyEvent>> {
         // Keep track of task budget
         let coop = ready!(crate::coop::poll_proceed(cx));
+        println!("coop ready");
         let ev = ready!(self.shared.poll_readiness(cx, direction));
+        println!("ev ready");
 
         if self.handle.inner().is_none() {
             return Poll::Ready(Err(gone()));

@@ -87,7 +87,7 @@ impl State {
     /// The `NOTIFIED` bit is always unset.
     pub(super) fn transition_to_running(&self, ref_inc: bool) -> UpdateResult {
         self.fetch_update(|curr| {
-            assert!(curr.is_notified());
+            //assert!(curr.is_notified());
 
             let mut next = curr;
 

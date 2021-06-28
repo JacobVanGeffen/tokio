@@ -1,11 +1,13 @@
 use super::{Interest, Ready, ReadyEvent, Tick};
 use crate::loom::sync::atomic::AtomicUsize;
 use crate::loom::sync::Mutex;
+use crate::runtime::Handle;
 use crate::util::bit;
 use crate::util::slab::Entry;
 
 use std::sync::atomic::Ordering::{AcqRel, Acquire, Release};
 use std::task::{Context, Poll, Waker};
+use std::time::Duration;
 
 use super::Direction;
 
@@ -217,7 +219,9 @@ impl ScheduledIo {
         let mut wakers: [Option<Waker>; NUM_WAKERS] = Default::default();
         let mut curr = 0;
 
+        println!("about to acquire lock");
         let mut waiters = self.waiters.lock();
+        println!("done acquire lock");
 
         waiters.is_shutdown |= shutdown;
 
@@ -332,6 +336,16 @@ impl ScheduledIo {
                     ready: direction.mask(),
                 })
             } else if ready.is_empty() {
+                // TODO
+                // cx.waker().wake_by_ref();
+                /*
+                shuttle::thread::spawn_named(move || {
+                    while true { // (direction.mask() & Ready::from_usize(READINESS.unpack(curr))).is_empty() {
+                        crate::io::driver::Handle::current().turn(Some(Duration::from_millis(0)));
+                        shuttle::thread::yield_now();
+                    }
+                }, Some("Ready checker".to_string()), None);
+                */
                 Poll::Pending
             } else {
                 Poll::Ready(ReadyEvent {

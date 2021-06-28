@@ -25,30 +25,14 @@ use std::time::Duration;
 
 /// I/O driver, backed by Mio
 pub(crate) struct Driver {
-    /// Tracks the number of times `turn` is called. It is safe for this to wrap
-    /// as it is mostly used to determine when to call `compact()`
-    tick: u8,
-
-    /// Reuse the `mio::Events` value across calls to poll.
-    events: Option<mio::Events>,
-
-    /// Primary slab handle containing the state for each resource registered
-    /// with this driver. During Drop this is moved into the Inner structure, so
-    /// this is an Option to allow it to be vacated (until Drop this is always
-    /// Some)
-    resources: Option<Slab<ScheduledIo>>,
-
-    /// The system event queue
-    poll: mio::Poll,
-
     /// State shared between the reactor and the handles.
-    inner: Arc<Inner>,
+    inner: Arc<Mutex<Inner>>,
 }
 
 /// A reference to an I/O driver
 #[derive(Clone)]
-pub(crate) struct Handle {
-    inner: Weak<Inner>,
+pub struct Handle {
+    inner: Weak<Mutex<Inner>>,
 }
 
 pub(crate) struct ReadyEvent {
@@ -63,7 +47,7 @@ pub(super) struct Inner {
     /// The ownership of this slab is moved into this structure during
     /// `Driver::drop`, so that `Inner::drop` can notify all outstanding handles
     /// without risking new ones being registered in the meantime.
-    resources: Mutex<Option<Slab<ScheduledIo>>>,
+    resources: Option<Slab<ScheduledIo>>,
 
     /// Registers I/O resources
     registry: mio::Registry,
@@ -73,6 +57,23 @@ pub(super) struct Inner {
 
     /// Used to wake up the reactor from a call to `turn`
     waker: mio::Waker,
+
+    /// Tracks the number of times `turn` is called. It is safe for this to wrap
+    /// as it is mostly used to determine when to call `compact()`
+    tick: u8,
+
+    /// Reuse the `mio::Events` value across calls to poll.
+    events: Option<mio::Events>,
+
+    /*
+    /// Primary slab handle containing the state for each resource registered
+    /// with this driver. During Drop this is moved into the Inner structure, so
+    /// this is an Option to allow it to be vacated (until Drop this is always
+    /// Some)
+    resources: Option<Slab<ScheduledIo>>, */
+
+    /// The system event queue
+    poll: mio::Poll,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -120,16 +121,15 @@ impl Driver {
         let allocator = slab.allocator();
 
         Ok(Driver {
-            tick: 0,
-            events: Some(mio::Events::with_capacity(1024)),
-            poll,
-            resources: Some(slab),
-            inner: Arc::new(Inner {
-                resources: Mutex::new(None),
+            inner: Arc::new(Mutex::new(Inner {
+                resources: Some(slab),
                 registry,
                 io_dispatch: allocator,
                 waker,
-            }),
+                tick: 0,
+                events: Some(mio::Events::with_capacity(1024)),
+                poll,
+            })),
         })
     }
 
@@ -146,6 +146,137 @@ impl Driver {
     }
 
     fn turn(&mut self, max_wait: Option<Duration>) -> io::Result<()> {
+        let mut inner = self.inner.lock();
+        inner.turn(max_wait)
+    }
+}
+
+impl Drop for Driver {
+    fn drop(&mut self) {
+        // (*self.inner.resources.lock()) = self.resources.take();
+    }
+}
+
+impl Drop for Inner {
+    fn drop(&mut self) {
+        /*
+        // TODO
+        let resources = self.resources;
+        if let Some(mut slab) = resources {
+            slab.for_each(|io| {
+                // If a task is waiting on the I/O resource, notify it. The task
+                // will then attempt to use the I/O resource and fail due to the
+                // driver being shutdown.
+                io.shutdown();
+            });
+        }
+        */
+    }
+}
+
+impl Park for Driver {
+    type Unpark = Handle;
+    type Error = io::Error;
+
+    fn unpark(&self) -> Self::Unpark {
+        self.handle()
+    }
+
+    fn park(&mut self) -> io::Result<()> {
+        self.turn(None)?;
+        Ok(())
+    }
+
+    fn park_timeout(&mut self, duration: Duration) -> io::Result<()> {
+        self.turn(Some(duration))?;
+        Ok(())
+    }
+
+    fn shutdown(&mut self) {}
+}
+
+impl fmt::Debug for Driver {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Driver")
+    }
+}
+
+// ===== impl Handle =====
+
+cfg_rt! {
+    impl Handle {
+        /// Returns a handle to the current reactor
+        ///
+        /// # Panics
+        ///
+        /// This function panics if there is no current reactor set and `rt` feature
+        /// flag is not enabled.
+        pub fn current() -> Self {
+            crate::runtime::context::io_handle().expect("A Tokio 1.x context was found, but IO is disabled. Call `enable_io` on the runtime builder to enable IO.")
+        }
+
+        pub fn turn(&mut self, max_wait: Option<Duration>) -> io::Result<()> {
+            let inner = self.inner.upgrade().unwrap();
+            let mut inner = inner.lock();
+            inner.turn(max_wait)
+        }
+    }
+}
+
+cfg_not_rt! {
+    impl Handle {
+        /// Returns a handle to the current reactor
+        ///
+        /// # Panics
+        ///
+        /// This function panics if there is no current reactor set, or if the `rt`
+        /// feature flag is not enabled.
+        pub(super) fn current() -> Self {
+            panic!("{}", crate::util::error::CONTEXT_MISSING_ERROR)
+        }
+    }
+}
+
+impl Handle {
+    /// Forces a reactor blocked in a call to `turn` to wakeup, or otherwise
+    /// makes the next call to `turn` return immediately.
+    ///
+    /// This method is intended to be used in situations where a notification
+    /// needs to otherwise be sent to the main reactor. If the reactor is
+    /// currently blocked inside of `turn` then it will wake up and soon return
+    /// after this method has been called. If the reactor is not currently
+    /// blocked in `turn`, then the next call to `turn` will not block and
+    /// return immediately.
+    fn wakeup(&self) {
+        if let Some(inner) = self.inner() {
+            let inner = inner.lock();
+            inner.waker.wake().expect("failed to wake I/O driver");
+        }
+    }
+
+    pub(super) fn inner(&self) -> Option<Arc<Mutex<Inner>>> {
+        self.inner.upgrade()
+    }
+}
+
+impl Unpark for Handle {
+    fn unpark(&self) {
+        self.wakeup();
+    }
+}
+
+impl fmt::Debug for Handle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Handle")
+    }
+}
+
+// ===== impl Inner =====
+
+impl Inner {
+
+    fn turn(&mut self, max_wait: Option<Duration>) -> io::Result<()> {
+        println!("Starting turn with duration: {:?}", max_wait);
         // How often to call `compact()` on the resource slab
         const COMPACT_INTERVAL: u8 = 255;
 
@@ -198,122 +329,7 @@ impl Driver {
 
         io.wake(ready);
     }
-}
 
-impl Drop for Driver {
-    fn drop(&mut self) {
-        (*self.inner.resources.lock()) = self.resources.take();
-    }
-}
-
-impl Drop for Inner {
-    fn drop(&mut self) {
-        let resources = self.resources.lock().take();
-
-        if let Some(mut slab) = resources {
-            slab.for_each(|io| {
-                // If a task is waiting on the I/O resource, notify it. The task
-                // will then attempt to use the I/O resource and fail due to the
-                // driver being shutdown.
-                io.shutdown();
-            });
-        }
-    }
-}
-
-impl Park for Driver {
-    type Unpark = Handle;
-    type Error = io::Error;
-
-    fn unpark(&self) -> Self::Unpark {
-        self.handle()
-    }
-
-    fn park(&mut self) -> io::Result<()> {
-        self.turn(None)?;
-        Ok(())
-    }
-
-    fn park_timeout(&mut self, duration: Duration) -> io::Result<()> {
-        self.turn(Some(duration))?;
-        Ok(())
-    }
-
-    fn shutdown(&mut self) {}
-}
-
-impl fmt::Debug for Driver {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Driver")
-    }
-}
-
-// ===== impl Handle =====
-
-cfg_rt! {
-    impl Handle {
-        /// Returns a handle to the current reactor
-        ///
-        /// # Panics
-        ///
-        /// This function panics if there is no current reactor set and `rt` feature
-        /// flag is not enabled.
-        pub(super) fn current() -> Self {
-            crate::runtime::context::io_handle().expect("A Tokio 1.x context was found, but IO is disabled. Call `enable_io` on the runtime builder to enable IO.")
-        }
-    }
-}
-
-cfg_not_rt! {
-    impl Handle {
-        /// Returns a handle to the current reactor
-        ///
-        /// # Panics
-        ///
-        /// This function panics if there is no current reactor set, or if the `rt`
-        /// feature flag is not enabled.
-        pub(super) fn current() -> Self {
-            panic!("{}", crate::util::error::CONTEXT_MISSING_ERROR)
-        }
-    }
-}
-
-impl Handle {
-    /// Forces a reactor blocked in a call to `turn` to wakeup, or otherwise
-    /// makes the next call to `turn` return immediately.
-    ///
-    /// This method is intended to be used in situations where a notification
-    /// needs to otherwise be sent to the main reactor. If the reactor is
-    /// currently blocked inside of `turn` then it will wake up and soon return
-    /// after this method has been called. If the reactor is not currently
-    /// blocked in `turn`, then the next call to `turn` will not block and
-    /// return immediately.
-    fn wakeup(&self) {
-        if let Some(inner) = self.inner() {
-            inner.waker.wake().expect("failed to wake I/O driver");
-        }
-    }
-
-    pub(super) fn inner(&self) -> Option<Arc<Inner>> {
-        self.inner.upgrade()
-    }
-}
-
-impl Unpark for Handle {
-    fn unpark(&self) {
-        self.wakeup();
-    }
-}
-
-impl fmt::Debug for Handle {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Handle")
-    }
-}
-
-// ===== impl Inner =====
-
-impl Inner {
     /// Registers an I/O resource with the reactor for a given `mio::Ready` state.
     ///
     /// The registration token is returned.

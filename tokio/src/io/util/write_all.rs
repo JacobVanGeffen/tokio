@@ -40,6 +40,7 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let me = self.project();
         while !me.buf.is_empty() {
+            // TODO check me.writer/ if poll_write goes through epoll
             let n = ready!(Pin::new(&mut *me.writer).poll_write(cx, me.buf))?;
             {
                 let (_, rest) = mem::replace(&mut *me.buf, &[]).split_at(n);

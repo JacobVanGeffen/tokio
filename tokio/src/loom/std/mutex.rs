@@ -1,5 +1,5 @@
-use std::sync::{TryLockError};
 use shuttle::sync::{self, MutexGuard};
+use std::sync::TryLockError;
 
 /// Adapter for `std::Mutex` that removes the poisoning aspects
 // from its api

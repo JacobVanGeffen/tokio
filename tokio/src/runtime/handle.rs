@@ -4,6 +4,7 @@ use crate::runtime::{blocking, context, driver, Spawner};
 use crate::util::error::CONTEXT_MISSING_ERROR;
 
 use std::future::Future;
+use std::task::Poll;
 use std::{error, fmt};
 
 /// Handle to the runtime.
@@ -43,6 +44,22 @@ pub struct Handle {
 pub struct EnterGuard<'a> {
     handle: &'a Handle,
     guard: context::EnterGuard,
+}
+
+// NOTE: This is basically the same as runtime::blocking::NoopSchedule
+struct NoopSchedule;
+impl crate::runtime::task::Schedule for NoopSchedule {
+    fn bind(task: crate::runtime::task::Task<Self>) -> Self {
+        NoopSchedule
+    }
+
+    fn release(&self, task: &crate::runtime::task::Task<Self>) -> Option<crate::runtime::task::Task<Self>> {
+        None
+    }
+
+    fn schedule(&self, task: crate::runtime::task::Notified<Self>) {
+        unreachable!();
+    }
 }
 
 impl Handle {
@@ -148,10 +165,8 @@ impl Handle {
 
         #[cfg(all(tokio_unstable, feature = "tracing"))]
         let future = crate::util::trace::task(future, "task");
-        // TODO pass this join handler into the "empty" join handler
-        shuttle::asynch::spawn(future);
-        JoinHandle::new_empty()
-        //self.spawner.spawn(future)
+        JoinHandle::new_async_handle(shuttle::asynch::spawn(future))
+        // self.spawner.spawn(shuttle::asynch::spawn(future))
     }
 
     /// Run the provided function on an executor dedicated to blocking
@@ -203,12 +218,38 @@ impl Handle {
             );
             fut.instrument(span)
         };
-        // let (task, handle) = task::joinable(fut);
-        // let _ = self.blocking_spawner.spawn(task, &self);
+
+        // TODO NEXT
+        /*
+        struct ShuttleFuture<S> { inner: shuttle::thread::JoinHandle<S> }
+        impl<S> Future for ShuttleFuture<S> {
+            type Output = task::Result<S>;
+
+            fn poll(self: std::pin::Pin<&mut Self>, _cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
+                if let Some(result) = self.inner.result() {
+                    Poll::Ready(
+                        match result {
+                            Ok(res) => Ok(res),
+                            Err(err) => Err(task::JoinError::panic(err)),
+                            // TODO other error cases when implemented
+                        }
+                    )
+                } else {
+                    Poll::Pending
+                }
+            }
+        }
+        */
+        // let (task, handle) = task::joinable(ShuttleFuture { inner: shuttle::thread::spawn(func) });
         // handle
+        // let _ = self.blocking_spawner.spawn(task, &self);
         // TODO pass this join handle into the "empty" join handle
-        shuttle::thread::spawn(func);
-        JoinHandle::new_empty()
+        JoinHandle::new_thread_handle(shuttle::thread::spawn_named(|| {
+            shuttle::thread::yield_now();
+            let ret = func();
+            println!("done with func");
+            ret
+        }, Some("spawn_blocking".to_string()), None))
     }
 
     /// Run a future to completion on this `Handle`'s associated `Runtime`.
@@ -282,6 +323,7 @@ impl Handle {
     /// [`tokio::net`]: crate::net
     /// [`tokio::time`]: crate::time
     pub fn block_on<F: Future>(&self, future: F) -> F::Output {
+        // TODO replace with shuttle::thread::block_on ? or shuttle::asynch::block_on ?
         // Enter the **runtime** context. This configures spawning, the current I/O driver, ...
         let _rt_enter = self.enter();
 

@@ -86,6 +86,7 @@ cfg_rt! {
         T: Future + Send + 'static,
         S: Schedule,
     {
+        println!("joinable called");
         let raw = RawTask::new::<_, S>(task);
 
         let task = Task {
@@ -93,7 +94,7 @@ cfg_rt! {
             _p: PhantomData,
         };
 
-        let join = JoinHandle::new(raw);
+        let join = JoinHandle::new(None);
 
         (Notified(task), join)
     }
@@ -106,6 +107,7 @@ cfg_rt! {
         T: Future + 'static,
         S: Schedule,
     {
+        println!("joinable_local called");
         let raw = RawTask::new::<_, S>(task);
 
         let task = Task {
@@ -113,7 +115,7 @@ cfg_rt! {
             _p: PhantomData,
         };
 
-        let join = JoinHandle::new(raw);
+        let join = JoinHandle::new(None);
 
         (Notified(task), join)
     }

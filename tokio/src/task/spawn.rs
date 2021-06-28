@@ -129,9 +129,12 @@ cfg_rt! {
         T: Future + Send + 'static,
         T::Output: Send + 'static,
     {
+        /*
         let spawn_handle = runtime::context::spawn_handle()
         .expect(CONTEXT_MISSING_ERROR);
         let task = crate::util::trace::task(task, "task");
         spawn_handle.spawn(task)
+        */
+        JoinHandle::new_async_handle(shuttle::asynch::spawn(task))
     }
 }

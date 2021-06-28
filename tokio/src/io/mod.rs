@@ -205,7 +205,7 @@ pub use self::read_buf::ReadBuf;
 pub use std::io::{Error, ErrorKind, Result, SeekFrom};
 
 cfg_io_driver_impl! {
-    pub(crate) mod driver;
+    pub mod driver;
 
     cfg_net! {
         pub use driver::{Interest, Ready};

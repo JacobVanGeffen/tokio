@@ -62,6 +62,7 @@ impl RawTask {
 
     /// Safety: mutual exclusion is required to call this function.
     pub(super) fn poll(self) {
+        println!("Polling the raw task");
         let vtable = self.header().vtable;
         unsafe { (vtable.poll)(self.ptr) }
     }
@@ -76,6 +77,7 @@ impl RawTask {
     /// Safety: `dst` must be a `*mut Poll<super::Result<T::Output>>` where `T`
     /// is the future stored by the task.
     pub(super) unsafe fn try_read_output(self, dst: *mut (), waker: &Waker) {
+        println!("Trying to read output");
         let vtable = self.header().vtable;
         (vtable.try_read_output)(self.ptr, dst, waker);
     }

@@ -208,12 +208,14 @@ impl<P: Park> Inner<P> {
             pin!(future);
 
             'outer: loop {
+                println!("loop iter");
                 if scheduler.spawner.was_woken() || !polled {
                     polled = true;
                     if let Ready(v) = crate::coop::budget(|| future.as_mut().poll(&mut cx)) {
                         return v;
                     }
                 }
+                println!("past return block");
 
                 for _ in 0..MAX_TASKS_PER_TICK {
                     // Get and increment the current tick
@@ -239,10 +241,12 @@ impl<P: Park> Inner<P> {
                             .or_else(|| scheduler.spawner.pop())
                     };
 
+                    println!("Entry is some?: {:?}", entry.is_some());
                     let entry = match entry {
                         Some(entry) => entry,
                         None => {
                             // Park until the thread is signaled
+                            println!("Parking");
                             scheduler.park.park().expect("failed to park");
 
                             // Try polling the `block_on` future next
@@ -273,6 +277,7 @@ impl<P: Park> Inner<P> {
                         }
                     }
                 }
+                println!("Finished schedule loop");
 
                 // Yield to the park, this drives the timer and pulls any pending
                 // I/O events.

@@ -87,7 +87,7 @@ time = []
 
 [dependencies]
 tokio-macros = { version = "1.1.0", path = "../tokio-macros", optional = true }
-shuttle = "0.0.5"
+shuttle = { version = "0.0.5", path = "../../my-shuttle/shuttle" }
 
 pin-project-lite = "0.2.0"
 

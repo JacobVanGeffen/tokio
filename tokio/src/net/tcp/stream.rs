@@ -110,6 +110,7 @@ impl TcpStream {
     /// [`AsyncWriteExt`]: trait@crate::io::AsyncWriteExt
     pub async fn connect<A: ToSocketAddrs>(addr: A) -> io::Result<TcpStream> {
         let addrs = to_socket_addrs(addr).await?;
+        println!("Made it past addrs");
 
         let mut last_err = None;
 
@@ -118,6 +119,7 @@ impl TcpStream {
                 Ok(stream) => return Ok(stream),
                 Err(e) => last_err = Some(e),
             }
+            println!("Made it past one addr");
         }
 
         Err(last_err.unwrap_or_else(|| {
@@ -143,7 +145,9 @@ impl TcpStream {
         // actually hit an error or not.
         //
         // If all that succeeded then we ship everything on up.
+        println!("Before poll_fn");
         poll_fn(|cx| stream.io.registration().poll_write_ready(cx)).await?;
+        println!("After poll_fn");
 
         if let Some(e) = stream.io.take_error()? {
             return Err(e);
